@@ -1,0 +1,30 @@
+{
+  "sensor_cols": [
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]"
+  ],
+  "error_threshold": 0.10655523857023119,
+  "costos": {
+    "costo_falla": 100,
+    "costo_parada_preventiva": 5,
+    "costo_parada_innecesaria": 10
+  },
+  "normalizacion": {
+    "tool_wear_max": 253.0,
+    "torque_max": 76.6
+  },
+  "acciones": {
+    "0": "operar",
+    "1": "mantenimiento_preventivo",
+    "2": "parada_emergencia"
+  },
+  "observation_space": [
+    "reconstruction_error",
+    "tiempo_desde_mantenimiento_norm",
+    "tool_wear_norm",
+    "torque_norm"
+  ]
+}

@@ -1,0 +1,172 @@
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from components import api_client, ui
+
+st.set_page_config(page_title="Monitoreo · Predictive Maintenance", page_icon="📡", layout="wide")
+ui.load_css()
+
+api_url = api_client.get_api_url()
+health = api_client.check_health(api_url)
+
+ui.eyebrow("MÓDULO · TIEMPO REAL")
+st.markdown("# 📡 Monitoreo de sensores")
+st.caption("Simula (o carga) lecturas de sensores y observa el error de reconstrucción en vivo, como el trazo de un osciloscopio.")
+
+if health is None:
+    st.stop()
+
+FEATURES = [
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]",
+]
+RANGES = {
+    "Air temperature [K]": (295.0, 304.0),
+    "Process temperature [K]": (305.0, 313.5),
+    "Rotational speed [rpm]": (1180, 2100),
+    "Torque [Nm]": (25.0, 55.0),
+    "Tool wear [min]": (0, 253),
+}
+
+import numpy as np
+
+
+def _simulate_reading(anomaly: bool, machine_id: str) -> dict:
+    row = {"machine_id": machine_id}
+    for feat, (lo, hi) in RANGES.items():
+        base = np.random.uniform(lo, hi)
+        if anomaly:
+            shift = (hi - lo) * np.random.uniform(0.4, 0.9) * np.random.choice([-1, 1])
+            base += shift
+        row[feat] = float(base)
+    row["tiempo_desde_mantenimiento_min"] = float(np.random.uniform(0, 220))
+    return row
+
+
+if "monitor_history" not in st.session_state:
+    st.session_state.monitor_history = pd.DataFrame()
+
+# --------------------------------------------------------------------------
+# Controles
+# --------------------------------------------------------------------------
+ui.panel_start("Fuente de datos", "Genera lecturas simuladas o sube un CSV con lecturas reales")
+c1, c2, c3, c4 = st.columns([1, 1, 1, 1.4])
+with c1:
+    machine_id = st.text_input("Machine ID", "M-001")
+with c2:
+    n_points = st.number_input("Lecturas a generar", 1, 50, 5)
+with c3:
+    anomaly_prob = st.slider("Prob. anomalía (demo)", 0.0, 0.6, 0.15)
+with c4:
+    gen = st.button("▶ Generar lecturas", use_container_width=True)
+
+upload = st.file_uploader(f"…o sube un CSV con columnas: {', '.join(FEATURES)}", type=["csv"])
+ui.panel_end()
+
+if gen:
+    new_rows = [_simulate_reading(np.random.rand() < anomaly_prob, machine_id) for _ in range(n_points)]
+    with st.spinner("Consultando la API…"):
+        results = api_client.predict(new_rows, api_url)
+    for row, res in zip(new_rows, results):
+        row.update(res)
+        row["timestamp"] = datetime.now()
+    st.session_state.monitor_history = pd.concat(
+        [st.session_state.monitor_history, pd.DataFrame(new_rows)], ignore_index=True
+    ).tail(300)
+    api_client.get_alerts.clear()
+
+if upload is not None:
+    uploaded_df = pd.read_csv(upload)
+    missing = [f for f in FEATURES if f not in uploaded_df.columns]
+    if missing:
+        st.error(f"Faltan columnas: {missing}")
+    else:
+        if "machine_id" not in uploaded_df.columns:
+            uploaded_df["machine_id"] = machine_id
+        if "tiempo_desde_mantenimiento_min" not in uploaded_df.columns:
+            uploaded_df["tiempo_desde_mantenimiento_min"] = 0.0
+        records = uploaded_df.to_dict(orient="records")
+        with st.spinner("Consultando la API…"):
+            results = api_client.predict(records, api_url)
+        for row, res in zip(records, results):
+            row.update(res)
+            row["timestamp"] = datetime.now()
+        st.session_state.monitor_history = pd.concat(
+            [st.session_state.monitor_history, pd.DataFrame(records)], ignore_index=True
+        ).tail(300)
+        api_client.get_alerts.clear()
+
+history = st.session_state.monitor_history
+
+if history.empty:
+    st.info("Genera lecturas o sube un CSV para comenzar el monitoreo.")
+    st.stop()
+
+# --------------------------------------------------------------------------
+# KPIs de la sesión
+# --------------------------------------------------------------------------
+n_total = len(history)
+n_anom = int(history["is_anomaly"].sum())
+n_crit = int((history["severity"] == "critical").sum())
+cards = [
+    ui.kpi_card("Lecturas en pantalla", str(n_total), "últimas 300", "var(--accent-signal)"),
+    ui.kpi_card("Sobre el umbral", str(n_anom), f"{n_anom/n_total*100:.1f}% del total", "var(--status-warning)"),
+    ui.kpi_card("Paradas de emergencia", str(n_crit), "acción crítica del agente", "var(--status-critical)"),
+]
+ui.kpi_grid(cards)
+
+# --------------------------------------------------------------------------
+# Gráfico tipo osciloscopio
+# --------------------------------------------------------------------------
+ui.panel_start("Señal de error de reconstrucción", "Cada pico por encima de la línea punteada dispara una acción del agente")
+metadata = api_client.get_metadata(api_url) or {}
+threshold = metadata.get("threshold", 0.35)
+
+color_map = {"ok": "#0D9488", "warning": "#D97706", "critical": "#E11D48"}
+colors = history["severity"].map(color_map).fillna("#0D9488")
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=list(range(len(history))), y=history["reconstruction_error"],
+    mode="lines", line=dict(color="#2563EB", width=1.5), name="error", showlegend=False,
+))
+fig.add_trace(go.Scatter(
+    x=list(range(len(history))), y=history["reconstruction_error"],
+    mode="markers", marker=dict(color=colors, size=7, line=dict(width=1, color="#FFFFFF")),
+    name="lectura", showlegend=False,
+))
+fig.add_hline(y=threshold, line_dash="dot", line_color="#64748B", annotation_text="umbral", annotation_font_color="#64748B")
+fig.update_layout(
+    height=340, margin=dict(l=10, r=10, t=10, b=10),
+    plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
+    font=dict(color="#64748B", family="IBM Plex Mono"),
+    xaxis=dict(gridcolor="#E2E8F0", title="lectura"),
+    yaxis=dict(gridcolor="#E2E8F0", title="error de reconstrucción"),
+)
+st.plotly_chart(fig, use_container_width=True)
+ui.panel_end()
+
+# --------------------------------------------------------------------------
+# Tabla
+# --------------------------------------------------------------------------
+ui.panel_start("Log de lecturas", "")
+display_cols = ["timestamp", "machine_id"] + FEATURES + ["reconstruction_error", "action_label", "severity"]
+display_cols = [c for c in display_cols if c in history.columns]
+st.dataframe(
+    history[display_cols].sort_values("timestamp", ascending=False),
+    use_container_width=True, height=320,
+)
+if st.button("🗑 Limpiar historial de esta sesión"):
+    st.session_state.monitor_history = pd.DataFrame()
+    st.rerun()
+ui.panel_end()

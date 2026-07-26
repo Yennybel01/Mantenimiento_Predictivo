@@ -1,0 +1,67 @@
+{
+  "model_name": "autoencoder_dqn_predictive_maintenance",
+  "version": "1.0.0",
+  "framework": "tensorflow/keras + stable-baselines3 (DQN)",
+  "dataset": "AI4I 2020 Predictive Maintenance Dataset (UCI)",
+  "features": [
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]"
+  ],
+  "threshold": 0.10655523857023119,
+  "hyperparameters": {
+    "autoencoder": {
+      "architecture": "5 -> 8 -> 4 (bottleneck) -> 8 -> 5",
+      "activation_hidden": "relu",
+      "activation_output": "linear",
+      "optimizer": "adam",
+      "loss": "mse",
+      "epochs": 50,
+      "batch_size": 32
+    },
+    "dqn_agent": {
+      "policy": "MlpPolicy",
+      "learning_rate": 0.001,
+      "buffer_size": 10000,
+      "learning_starts": 500,
+      "batch_size": 64,
+      "gamma": 0.95,
+      "total_timesteps": 20000,
+      "observation_space": [
+        "reconstruction_error",
+        "tiempo_desde_mantenimiento_norm",
+        "tool_wear_norm",
+        "torque_norm"
+      ],
+      "action_space": {
+        "0": "operar",
+        "1": "mantenimiento_preventivo",
+        "2": "parada_emergencia"
+      },
+      "costos_recompensa": {
+        "costo_falla": 100,
+        "costo_parada_preventiva": 5,
+        "costo_parada_innecesaria": 10
+      }
+    }
+  },
+  "metrics": {
+    "reconstruction_mse_normal_mean": 0.03686392182411052,
+    "reconstruction_mse_falla_mean": 0.08937502333229654,
+    "pct_fallas_sobre_umbral": 32.743362831858406,
+    "dqn_episodios_reaccion_a_tiempo": "7 / 20",
+    "nota_evaluacion": "Evaluado en 20 episodios simulados cerca de fallas reales del dataset AI4I. El agente reaccionó a tiempo (mantenimiento preventivo o parada) en 7 de 20 casos."
+  },
+  "trained_at": "2026-07-24",
+  "status": "modelo real cargado (autoencoder.h5 + scaler.pkl + dqn_maintenance_agent.zip)",
+  "retrain_history": [
+    {
+      "version": "1.0.0",
+      "trained_at": "2026-07-24",
+      "trigger": "entrenamiento inicial (equipo de train)",
+      "status": "producción"
+    }
+  ]
+}

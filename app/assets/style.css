@@ -1,0 +1,204 @@
+/* ============================================================
+   PREDICTIVE MAINTENANCE — Design tokens
+   Dirección: sala de control industrial / SCADA.
+   Un ingeniero de mantenimiento vive en pantallas oscuras con
+   datos densos; el monoespaciado remite a los paneles de
+   instrumentación reales. Los 3 colores de estado (ok / warning
+   / critical) son el lenguaje central de todo el sistema.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-void: #F8FAFC;
+    --bg-panel: #FFFFFF;
+    --bg-panel-raised: #F1F5F9;
+    --border-hairline: #E2E8F0;
+    --text-primary: #0F172A;
+    --text-secondary: #64748B;
+    --text-dim: #94A3B8;
+
+    --status-ok: #0D9488;
+    --status-ok-dim: rgba(13, 148, 136, 0.08);
+    --status-warning: #D97706;
+    --status-warning-dim: rgba(217, 119, 6, 0.08);
+    --status-critical: #E11D48;
+    --status-critical-dim: rgba(225, 29, 72, 0.08);
+    --accent-signal: #2563EB;
+    --accent-signal-dim: rgba(37, 99, 235, 0.08);
+
+    --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --font-body: 'Inter', -apple-system, sans-serif;
+}
+
+code {
+    display: inline !important;
+    background-color: var(--bg-panel-raised) !important;
+    color: var(--accent-signal) !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-family: var(--font-mono) !important;
+    font-size: 0.85em !important;
+    border: 1px solid var(--border-hairline) !important;
+}
+
+/* Base */
+.stApp {
+    background: var(--bg-void);
+    font-family: var(--font-body);
+    color: var(--text-primary);
+}
+section[data-testid="stSidebar"] {
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border-hairline);
+}
+h1, h2, h3 { font-family: var(--font-body); font-weight: 700; letter-spacing: -0.01em; }
+
+/* Oculta el menú/footer default de streamlit para look más "producto" */
+#MainMenu, footer { visibility: hidden; }
+
+/* ---------- Eyebrow / system label ---------- */
+.pm-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-signal);
+    margin-bottom: 4px;
+}
+
+/* ---------- KPI cards ---------- */
+.pm-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin: 8px 0 20px 0;
+}
+.pm-kpi-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hairline);
+    border-radius: 10px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+}
+.pm-kpi-card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--kpi-accent, var(--accent-signal));
+}
+.pm-kpi-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+.pm-kpi-value {
+    font-family: var(--font-mono);
+    font-size: 1.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.1;
+}
+.pm-kpi-sub {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+/* ---------- Status pill ---------- */
+.pm-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 999px;
+}
+.pm-pill-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+}
+.pm-pill.ok { background: var(--status-ok-dim); color: var(--status-ok); }
+.pm-pill.ok .pm-pill-dot { background: var(--status-ok); box-shadow: 0 0 8px var(--status-ok); }
+.pm-pill.warning { background: var(--status-warning-dim); color: var(--status-warning); }
+.pm-pill.warning .pm-pill-dot { background: var(--status-warning); box-shadow: 0 0 8px var(--status-warning); }
+.pm-pill.critical { background: var(--status-critical-dim); color: var(--status-critical); }
+.pm-pill.critical .pm-pill-dot { background: var(--status-critical); box-shadow: 0 0 8px var(--status-critical); }
+.pm-pill.offline { background: rgba(124,138,163,0.12); color: var(--text-secondary); }
+.pm-pill.offline .pm-pill-dot { background: var(--text-dim); }
+
+/* ---------- Panel / card container ---------- */
+.pm-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hairline);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+}
+.pm-panel-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+.pm-panel-sub {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+}
+
+/* ---------- Alert row ---------- */
+.pm-alert-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border-left: 3px solid var(--row-accent, var(--text-dim));
+    background: var(--bg-panel-raised);
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+}
+.pm-alert-time {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    min-width: 70px;
+}
+.pm-alert-machine {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    font-weight: 600;
+    min-width: 70px;
+}
+
+/* Streamlit buttons */
+div[data-testid="stButton"] button {
+    background: var(--accent-signal-dim);
+    border: 1px solid var(--accent-signal);
+    color: var(--accent-signal);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    border-radius: 8px;
+}
+div[data-testid="stButton"] button:hover {
+    background: var(--accent-signal);
+    color: var(--bg-void);
+}
+div[data-testid="stFormSubmitButton"] button {
+    background: var(--accent-signal);
+    color: var(--bg-void);
+    border: none;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    border-radius: 8px;
+}
+
+/* Metric numbers everywhere use mono */
+[data-testid="stMetricValue"] { font-family: var(--font-mono); }
