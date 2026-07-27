@@ -1,0 +1,33 @@
+services:
+  # ---------------------------------------------------------------------
+  # Backend: API REST (autoencoder + agente DQN)
+  # ---------------------------------------------------------------------
+  - type: web
+    name: pm-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false          # se configura manualmente en el dashboard de Render (secret)
+      - key: GITHUB_REPO
+        value: Yennybel01/Mantenimiento_Predictivo
+
+  # ---------------------------------------------------------------------
+  # Frontend: dashboard Streamlit
+  # ---------------------------------------------------------------------
+  - type: web
+    name: pm-app
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./app/Dockerfile
+    dockerContext: ./app
+    autoDeploy: true
+    envVars:
+      - key: PM_API_URL
+        value: https://pm-api.onrender.com   # ⚠️ reemplazar por la URL real que Render asigne a pm-api tras el primer deploy
