@@ -1,0 +1,24 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Caché de Python y compilados
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Jupyter Notebooks temporales
+.ipynb_checkpoints/
+
+# Archivos de sistema / IDEs
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Logs locales del sistema
+api/alerts_log.jsonl

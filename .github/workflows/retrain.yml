@@ -1,0 +1,99 @@
+name: CI/CD — Predictive Maintenance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Reentrenamiento automático cada lunes a las 03:00 UTC.
+    # Ajustar según la frecuencia real de llegada de datos nuevos.
+    - cron: "0 3 * * 1"
+  workflow_dispatch: {}   # permite disparo manual desde la pestaña Actions de GitHub
+
+jobs:
+  test:
+    name: Tests e integración continua
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias del backend
+        run: pip install -r api/requirements.txt
+
+      - name: Verificar sintaxis
+        run: python -m py_compile api/main.py api/ml_core.py
+
+      - name: Levantar la API y probar /health
+        run: |
+          cd api
+          nohup uvicorn main:app --port 8000 &
+          sleep 8
+          curl -sf http://localhost:8000/health
+
+      # TODO (equipo de mantenimiento): agregar pytest con casos reales
+      # cubriendo /predict, /model/metadata y /alerts antes de habilitar
+      # el gate de despliegue automático.
+
+  retrain:
+    name: Reentrenamiento periódico del modelo
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias de entrenamiento
+        run: pip install -r api/requirements.txt pandas
+
+      # TODO (equipo de mantenimiento): reemplazar por el notebook/script
+      # real de entrenamiento (ver Entrenamiento.ipynb), apuntando a la
+      # fuente de datos actualizada (feature store / almacenamiento de
+      # características) en lugar de un CSV estático.
+      - name: Ejecutar pipeline de reentrenamiento
+        run: |
+          echo "Placeholder: aquí se re-ejecuta el entrenamiento del"
+          echo "Autoencoder + Agente DQN con los datos más recientes,"
+          echo "se recalcula el 'error_threshold' y se generan los"
+          echo "nuevos artefactos: autoencoder.h5, scaler.pkl, dqn_maintenance_agent.zip"
+
+      - name: Validar métricas mínimas antes de publicar
+        run: |
+          echo "Placeholder: comparar métricas del modelo nuevo vs. el"
+          echo "modelo en producción (model_metadata.json). Si el nuevo"
+          echo "modelo no supera el umbral mínimo de calidad, el pipeline"
+          echo "debe fallar aquí y NO publicar la nueva versión."
+
+      - name: Registrar nueva versión y notificar al equipo
+        run: |
+          echo "Placeholder: subir los artefactos a api/models/, actualizar"
+          echo "model_metadata.json (version, trained_at, metrics,"
+          echo "retrain_history) y notificar al canal del equipo de MLOps."
+
+  build-and-push:
+    name: Build de imágenes Docker
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build imagen de la API
+        run: docker build -t predictive-maintenance-api:${{ github.sha }} ./api
+
+      - name: Build imagen del dashboard
+        run: docker build -t predictive-maintenance-app:${{ github.sha }} ./app
+
+      # TODO (equipo de deploy): agregar login al registry (ECR/GCR/Docker Hub)
+      # y el paso de `docker push`, más el despliegue (kubectl apply / ECS
+      # service update / etc.) según la infraestructura real de producción.

@@ -1,0 +1,6 @@
+# Instala TODO (backend + frontend) para desarrollo local en una sola venv.
+# En producción, cada capa se despliega por separado con su propio
+# requirements.txt (ver api/requirements.txt y app/requirements.txt) para
+# mantener el frontend liviano (sin TensorFlow/PyTorch).
+-r api/requirements.txt
+-r app/requirements.txt

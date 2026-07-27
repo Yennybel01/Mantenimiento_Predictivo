@@ -1,0 +1,18 @@
+services:
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api/models:/app/models   # facilita reemplazar el modelo sin reconstruir la imagen
+    restart: unless-stopped
+
+  app:
+    build: ./app
+    ports:
+      - "8501:8501"
+    environment:
+      - PM_API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
