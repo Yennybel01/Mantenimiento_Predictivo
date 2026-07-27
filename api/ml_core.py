@@ -16,6 +16,7 @@ No hay que tocar main.py.
 import json
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -37,6 +38,12 @@ ACCIONES_LABELS = {
 ACCIONES_SEVERITY = {0: "ok", 1: "warning", 2: "critical"}
 
 _START_TIME = time.time()
+
+# Subproceso persistente del autoencoder: se arranca UNA vez (en warmup) y
+# se reutiliza en cada predicción, para no pagar el costo de reimportar
+# TensorFlow por cada request (ver autoencoder_infer.py).
+_AE_PROC: Optional[subprocess.Popen] = None
+_AE_LOCK = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -76,19 +83,56 @@ def _load_dqn_agent():
     return DQN.load(MODELS_DIR / "dqn_maintenance_agent.zip")
 
 
+def _start_autoencoder_proc() -> subprocess.Popen:
+    proc = subprocess.Popen(
+        [sys.executable, str(AUTOENCODER_SCRIPT)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,  # line-buffered
+    )
+    # Espera la línea {"ready": true} antes de aceptar predicciones.
+    ready_line = proc.stdout.readline()
+    if not ready_line or "ready" not in ready_line:
+        stderr_tail = proc.stderr.read()[-2000:] if proc.stderr else ""
+        raise RuntimeError(f"El subproceso del autoencoder no arrancó correctamente: {stderr_tail}")
+    return proc
+
+
+def _get_autoencoder_proc() -> subprocess.Popen:
+    global _AE_PROC
+    if _AE_PROC is None or _AE_PROC.poll() is not None:
+        # None = nunca arrancó; poll() != None = se cayó, hay que reiniciarlo.
+        _AE_PROC = _start_autoencoder_proc()
+    return _AE_PROC
+
+
 def _reconstruction_errors(rows: list, sensor_cols: list) -> np.ndarray:
     payload = {"sensor_cols": sensor_cols, "rows": rows}
-    proc = subprocess.run(
-        [sys.executable, str(AUTOENCODER_SCRIPT)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Fallo en el subproceso del autoencoder: {proc.stderr[-2000:]}")
-    result = json.loads(proc.stdout.strip().splitlines()[-1])
-    return np.array(result["errors"])
+    with _AE_LOCK:
+        proc = _get_autoencoder_proc()
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+            out_line = proc.stdout.readline()
+        except (BrokenPipeError, OSError):
+            # El subproceso murió (ej. OOM); lo reiniciamos y reintentamos una vez.
+            global _AE_PROC
+            _AE_PROC = None
+            proc = _get_autoencoder_proc()
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+            out_line = proc.stdout.readline()
+
+        if not out_line:
+            stderr_tail = proc.stderr.read()[-2000:] if proc.stderr else ""
+            raise RuntimeError(f"El subproceso del autoencoder no respondió: {stderr_tail}")
+
+        result = json.loads(out_line)
+        if "error" in result:
+            raise RuntimeError(f"Error en el subproceso del autoencoder: {result['error']}")
+        return np.array(result["errors"])
 
 
 def _build_observations(records: list, errors: np.ndarray, config: dict) -> np.ndarray:

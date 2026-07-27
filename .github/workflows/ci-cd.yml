@@ -1,12 +1,13 @@
 name: CI/CD - Test, Build & Deploy
 
 # CI: se ejecuta en cada push/PR para validar que nada rompe.
-# CD: el deploy solo se dispara en push a main y solo si CI pasó.
+# CD: el deploy solo se dispara en push a main/UI y solo si CI pasó.
+# TODO: quitar "UI" de esta lista cuando fusionen definitivamente a main.
 on:
   push:
-    branches: [main]
+    branches: [main, UI]
   pull_request:
-    branches: [main]
+    branches: [main, UI]
   workflow_dispatch: {}
 
 jobs:
@@ -57,7 +58,7 @@ jobs:
     name: Trigger deploy on Render
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/UI')
     steps:
       - name: Deploy pm-api
         run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}"
