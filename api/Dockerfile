@@ -19,6 +19,12 @@ RUN pip install --no-cache-dir numpy joblib scikit-learn
 RUN pip install --no-cache-dir fastapi "uvicorn[standard]" pydantic requests
 RUN pip install --no-cache-dir tensorflow-cpu
 RUN pip install --no-cache-dir gymnasium
+
+# IMPORTANTE: instalar PyTorch CPU-only ANTES de stable-baselines3. Si no,
+# pip instala por defecto la variante con CUDA completa (varios GB extra de
+# librerías NVIDIA que nunca se usan en Render, sin GPU), y eso satura la
+# memoria RAM al importarla en tiempo de ejecución -> OOM en el arranque.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir stable-baselines3
 
 COPY . .
