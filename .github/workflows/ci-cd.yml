@@ -29,10 +29,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r api/requirements.txt
-          pip install pytest httpx
+          pip install pytest httpx pandas numpy
 
-      - name: Run smoke tests
-        run: pytest tests/ -v
+      - name: "Run smoke tests (API)"
+        run: pytest tests/test_api.py -v
+
+      - name: "Run retrain pipeline tests"
+        run: pytest tests/test_retrain.py -v --tb=short
 
   # -------------------------------------------------------------------
   # 2) CI: valida que ambas imágenes Docker construyen sin errores

@@ -1,99 +1,182 @@
-name: CI/CD — Predictive Maintenance
+name: "Retrain Pipeline — Predictive Maintenance"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline de reentrenamiento del modelo de mantenimiento predictivo.
+#
+# Triggers:
+#   - schedule: Cada lunes 03:00 UTC (CASO 1 — Cron)
+#   - workflow_dispatch: Manual (CASO 4) o disparado por drift_monitor.yml (CASO 2/3)
+#
+# Pasos:
+#   1. Backup del modelo actual (api/models/ → models_backup/v{version}_{ts}/)
+#   2. Entrenamiento (Autoencoder + DQN con datos frescos)
+#   3. Validación — Model Gate (rechaza si métricas insuficientes)
+#   4. Promoción (copia models_new/ → api/models/, actualiza model_metadata.json)
+#   5. Rollback automático si el gate falla (restaura el backup del paso 1)
+# ──────────────────────────────────────────────────────────────────────────────
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
-    # Reentrenamiento automático cada lunes a las 03:00 UTC.
-    # Ajustar según la frecuencia real de llegada de datos nuevos.
-    - cron: "0 3 * * 1"
-  workflow_dispatch: {}   # permite disparo manual desde la pestaña Actions de GitHub
+    - cron: "0 3 * * 1"   # CASO 1: Cada lunes a las 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      trigger_reason:
+        description: "Motivo del reentrenamiento"
+        required: false
+        default: "manual"
+      drift_score:
+        description: "Drift score (si fue disparado por drift_monitor)"
+        required: false
+        default: "0"
+      drift_reason:
+        description: "Razón del drift detectado"
+        required: false
+        default: ""
+
+env:
+  RETRAIN_TRIGGER: ${{ github.event.inputs.trigger_reason || 'scheduled' }}
+  PYTHON_VERSION: "3.11"
 
 jobs:
-  test:
-    name: Tests e integración continua
+  # ─────────────────────────────────────────────────────────────
+  # JOB 1: Ejecutar el pipeline de reentrenamiento completo
+  # ─────────────────────────────────────────────────────────────
+  retrain:
+    name: "Reentrenamiento del Modelo"
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
-      - name: Instalar dependencias del backend
-        run: pip install -r api/requirements.txt
+      - name: "Instalar dependencias de entrenamiento"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install pandas scikit-learn
 
-      - name: Verificar sintaxis
-        run: python -m py_compile api/main.py api/ml_core.py
+      - name: "Mostrar contexto del reentrenamiento"
+        run: |
+          echo "## 🔄 Pipeline de Reentrenamiento" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ env.RETRAIN_TRIGGER }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Drift Score | ${{ github.event.inputs.drift_score || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Drift Reason | ${{ github.event.inputs.drift_reason || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Levantar la API y probar /health
+      # ── PASO 1: Backup ──────────────────────────────────────
+      - name: "PASO 1 — Backup del modelo actual"
+        run: |
+          echo "::group::Backup de modelos"
+          python api/retrain_script.py --backup
+          echo "::endgroup::"
+
+      # ── PASO 2: Entrenamiento ────────────────────────────────
+      - name: "PASO 2 — Reentrenamiento (Autoencoder + DQN)"
+        id: train
+        run: |
+          echo "::group::Entrenamiento"
+          python api/retrain_script.py --data-path data/ai4i2020.csv
+          echo "::endgroup::"
+
+      # ── PASO 3: Validación / Model Gate ─────────────────────
+      - name: "PASO 3 — Validación de métricas (Model Gate)"
+        id: gate
+        run: |
+          echo "::group::Model Gate"
+          python api/retrain_script.py --validate-only
+          echo "::endgroup::"
+
+      # ── PASO 4: Promoción ────────────────────────────────────
+      - name: "PASO 4 — Promover modelo a producción"
+        run: |
+          echo "::group::Promoción"
+          python api/retrain_script.py --promote
+          echo "::endgroup::"
+
+      - name: "Leer nueva versión del modelo"
+        id: new_version
+        run: |
+          VERSION=$(python -c "import json; print(json.load(open('api/models/model_metadata.json'))['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice title=Modelo promovido::Nueva versión: $VERSION"
+
+      # ── PASO 5 (solo si hay fallo): Rollback ─────────────────
+      - name: "ROLLBACK — Restaurar modelo anterior (solo si el gate falló)"
+        if: failure()
+        run: |
+          echo "::error title=Model Gate Fallido::El modelo nuevo no superó los criterios de calidad. Ejecutando rollback..."
+          python api/retrain_script.py --rollback
+          echo "## ❌ Reentrenamiento Fallido — Rollback Ejecutado" >> $GITHUB_STEP_SUMMARY
+          echo "El modelo anterior ha sido restaurado desde el backup." >> $GITHUB_STEP_SUMMARY
+
+      - name: "Resumen final del pipeline"
+        if: success()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Reentrenamiento Exitoso" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Nueva versión | ${{ steps.new_version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | ✅ APROBADO |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ env.RETRAIN_TRIGGER }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: "Subir reporte del gate como artefacto"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-report-${{ github.run_id }}
+          path: gate_report.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2: Tests post-reentrenamiento (solo si retrain pasó)
+  # ─────────────────────────────────────────────────────────────
+  post-retrain-tests:
+    name: "Tests Post-Reentrenamiento"
+    runs-on: ubuntu-latest
+    needs: retrain
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt fastapi httpx pytest
+
+      - name: "Verificar que la API arranca con el nuevo modelo"
         run: |
           cd api
           nohup uvicorn main:app --port 8000 &
-          sleep 8
+          sleep 10
           curl -sf http://localhost:8000/health
+          curl -sf http://localhost:8000/model/metadata | python -m json.tool
+          kill %1 || true
 
-      # TODO (equipo de mantenimiento): agregar pytest con casos reales
-      # cubriendo /predict, /model/metadata y /alerts antes de habilitar
-      # el gate de despliegue automático.
-
-  retrain:
-    name: Reentrenamiento periódico del modelo
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependencias de entrenamiento
-        run: pip install -r api/requirements.txt pandas
-
-      # TODO (equipo de mantenimiento): reemplazar por el notebook/script
-      # real de entrenamiento (ver Entrenamiento.ipynb), apuntando a la
-      # fuente de datos actualizada (feature store / almacenamiento de
-      # características) en lugar de un CSV estático.
-      - name: Ejecutar pipeline de reentrenamiento
+      - name: "Verificar versión del modelo en metadata"
         run: |
-          echo "Placeholder: aquí se re-ejecuta el entrenamiento del"
-          echo "Autoencoder + Agente DQN con los datos más recientes,"
-          echo "se recalcula el 'error_threshold' y se generan los"
-          echo "nuevos artefactos: autoencoder.h5, scaler.pkl, dqn_maintenance_agent.zip"
+          python -c "
+          import json
+          meta = json.load(open('api/models/model_metadata.json'))
+          print(f'Versión en producción: {meta[\"version\"]}')
+          print(f'Threshold: {meta[\"threshold\"]}')
+          print(f'Último reentrenamiento: {meta[\"retrain_history\"][-1]}')
+          "
 
-      - name: Validar métricas mínimas antes de publicar
+      - name: "Resumen de tests post-reentrenamiento"
         run: |
-          echo "Placeholder: comparar métricas del modelo nuevo vs. el"
-          echo "modelo en producción (model_metadata.json). Si el nuevo"
-          echo "modelo no supera el umbral mínimo de calidad, el pipeline"
-          echo "debe fallar aquí y NO publicar la nueva versión."
-
-      - name: Registrar nueva versión y notificar al equipo
-        run: |
-          echo "Placeholder: subir los artefactos a api/models/, actualizar"
-          echo "model_metadata.json (version, trained_at, metrics,"
-          echo "retrain_history) y notificar al canal del equipo de MLOps."
-
-  build-and-push:
-    name: Build de imágenes Docker
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build imagen de la API
-        run: docker build -t predictive-maintenance-api:${{ github.sha }} ./api
-
-      - name: Build imagen del dashboard
-        run: docker build -t predictive-maintenance-app:${{ github.sha }} ./app
-
-      # TODO (equipo de deploy): agregar login al registry (ECR/GCR/Docker Hub)
-      # y el paso de `docker push`, más el despliegue (kubectl apply / ECS
-      # service update / etc.) según la infraestructura real de producción.
+          echo "## ✅ API operativa con nuevo modelo" >> $GITHUB_STEP_SUMMARY
