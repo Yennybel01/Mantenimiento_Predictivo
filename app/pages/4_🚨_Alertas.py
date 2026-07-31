@@ -5,45 +5,44 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from components import api_client, ui
+from components import api_client, ui, i18n
 
-st.set_page_config(page_title="Alertas · Predictive Maintenance", page_icon="🚨", layout="wide")
 ui.load_css()
 
 api_url = api_client.get_api_url()
 health = api_client.check_health(api_url)
 
-ui.eyebrow("MÓDULO · ALERTAS")
-st.markdown("# 🚨 Historial de alertas")
-st.caption("Cada vez que el agente recomienda mantenimiento preventivo o parada de emergencia, queda registrado aquí para que el equipo de operaciones le dé seguimiento.")
+ui.eyebrow(i18n.t("eyebrow_alertas"))
+st.markdown(f"# {i18n.t('title_alertas')}")
+st.caption(i18n.t("subtitle_alertas"))
 
 if health is None:
     st.stop()
 
 c1, c2, c3 = st.columns([1, 1, 2])
 with c1:
-    severity_filter = st.selectbox("Filtrar por severidad", ["Todas", "warning", "critical"])
+    severity_filter = st.selectbox(i18n.t("filter_severity"), [i18n.t("all_filter"), "warning", "critical"])
 with c2:
-    limit = st.number_input("Máximo a mostrar", 10, 500, 100)
+    limit = st.number_input(i18n.t("max_to_show"), 10, 500, 100)
 with c3:
-    if st.button("🔄 Actualizar"):
+    if st.button(i18n.t("btn_update")):
         api_client.get_alerts.clear()
 
-sev = None if severity_filter == "Todas" else severity_filter
+sev = None if severity_filter == i18n.t("all_filter") else severity_filter
 alerts = api_client.get_alerts(api_url, limit=int(limit), severity=sev) or []
 
 n_warning = len([a for a in alerts if a["severity"] == "warning"])
 n_critical = len([a for a in alerts if a["severity"] == "critical"])
 cards = [
-    ui.kpi_card("Total en vista", str(len(alerts)), "", "var(--accent-signal)"),
-    ui.kpi_card("Mantenimiento preventivo", str(n_warning), "", "var(--status-warning)"),
-    ui.kpi_card("Paradas de emergencia", str(n_critical), "", "var(--status-critical)"),
+    ui.kpi_card(i18n.t("kpi_total_view"), str(len(alerts)), "", "var(--accent-signal)"),
+    ui.kpi_card(i18n.t("kpi_preventive_maintenance"), str(n_warning), "", "var(--status-warning)"),
+    ui.kpi_card(i18n.t("kpi_emergency_stops_alertas"), str(n_critical), "", "var(--status-critical)"),
 ]
 ui.kpi_grid(cards)
 
-ui.panel_start("Eventos", "Ordenados del más reciente al más antiguo")
+ui.panel_start(i18n.t("panel_events"), i18n.t("panel_events_sub"))
 if not alerts:
-    st.info("No hay alertas registradas todavía. Genera lecturas en el módulo de Monitoreo o Predicciones.")
+    st.info(i18n.t("no_alerts"))
 else:
     row_color = {"warning": "var(--status-warning)", "critical": "var(--status-critical)"}
     for a in alerts:
@@ -55,7 +54,7 @@ else:
 ui.panel_end()
 
 if alerts:
-    with st.expander("Ver detalle de lecturas (para diagnóstico técnico)"):
+    with st.expander(i18n.t("expander_technical_details")):
         import pandas as pd
         rows = []
         for a in alerts:

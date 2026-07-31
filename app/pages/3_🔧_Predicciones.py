@@ -6,37 +6,36 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from components import api_client, ui
+from components import api_client, ui, i18n
 
-st.set_page_config(page_title="Predicciones · Predictive Maintenance", page_icon="🔧", layout="wide")
 ui.load_css()
 
 api_url = api_client.get_api_url()
 health = api_client.check_health(api_url)
 
-ui.eyebrow("MÓDULO · INFERENCIA PUNTUAL")
-st.markdown("# 🔧 Evaluar una lectura")
-st.caption("Ingresa los valores de sensores de una máquina y consulta al Autoencoder + Agente DQN qué acción recomienda.")
+ui.eyebrow(i18n.t("eyebrow_predicciones"))
+st.markdown(f"# {i18n.t('title_predicciones')}")
+st.caption(i18n.t("subtitle_predicciones"))
 
 if health is None:
     st.stop()
 
-ui.panel_start("Lectura de sensores", "")
+ui.panel_start(i18n.t("panel_sensor_readings"), "")
 c1, c2 = st.columns(2)
 with c1:
     air_temp = st.number_input("Air temperature [K]", 290.0, 320.0, 300.0)
     process_temp = st.number_input("Process temperature [K]", 295.0, 320.0, 310.0)
     rot_speed = st.number_input("Rotational speed [rpm]", 800, 3000, 1500)
     tiempo_mantenimiento = st.number_input(
-        "Tiempo desde último mantenimiento (min)", 0, 500, 0,
-        help="Usado por el agente DQN para decidir la acción.",
+        i18n.t("time_since_maintenance"), 0, 500, 0,
+        help=i18n.t("time_since_maintenance_help"),
     )
 with c2:
     torque = st.number_input("Torque [Nm]", 0.0, 80.0, 40.0)
     tool_wear = st.number_input("Tool wear [min]", 0, 260, 50)
-    machine_id = st.text_input("Machine ID", value="M-001")
+    machine_id = st.text_input(i18n.t("machine_id"), value="M-001")
 
-submitted = st.button("🔍 Predecir", use_container_width=True, type="primary")
+submitted = st.button(i18n.t("btn_predict"), use_container_width=True, type="primary")
 ui.panel_end()
 
 if submitted:
@@ -49,11 +48,11 @@ if submitted:
         "Tool wear [min]": tool_wear,
         "tiempo_desde_mantenimiento_min": tiempo_mantenimiento,
     }
-    with st.spinner("Consultando la API…"):
+    with st.spinner(i18n.t("querying_api")):
         try:
             result = api_client.predict([record], api_url)[0]
         except Exception as e:
-            st.error(f"Error al predecir: {e}")
+            st.error(i18n.t("predict_error").format(error=e))
             st.stop()
     api_client.get_alerts.clear()
 
@@ -62,22 +61,22 @@ if submitted:
 
     colL, colR = st.columns([1, 1])
     with colL:
-        ui.panel_start("Resultado", f"Machine: {machine_id}")
-        st.markdown(ui.status_pill(result["severity"], result["action_label"].upper()), unsafe_allow_html=True)
+        ui.panel_start(i18n.t("panel_result"), f"{i18n.t('machine_label')}: {machine_id}")
+        translated_label = i18n.t(result["action_label"], result["action_label"]).upper()
+        st.markdown(ui.status_pill(result["severity"], translated_label), unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        st.metric("Error de reconstrucción", f"{result['reconstruction_error']:.4f}")
-        st.metric("Umbral", f"{threshold:.4f}")
-        st.write(f"**¿Supera el umbral?** {'Sí' if result['is_anomaly'] else 'No'}")
-        with st.expander("¿Qué significa cada acción?"):
-            st.markdown(
-                "- **Operar con normalidad**: el agente no ve riesgo suficiente.\n"
-                "- **Mantenimiento preventivo**: hay señales de desgaste/anomalía, conviene revisar pronto.\n"
-                "- **Parada de emergencia**: alto riesgo de falla inminente, detener la máquina."
-            )
+        st.metric(i18n.t("chart_error"), f"{result['reconstruction_error']:.4f}")
+        st.metric(i18n.t("kpi_threshold_analisis"), f"{threshold:.4f}")
+        
+        is_above = i18n.t("yes") if result['is_anomaly'] else i18n.t("no")
+        st.write(f"**{i18n.t('is_above_threshold')}** {is_above}")
+        
+        with st.expander(i18n.t("action_explanation_title")):
+            st.markdown(i18n.t("action_explanation_content"))
         ui.panel_end()
 
     with colR:
-        ui.panel_start("Error vs. umbral", "")
+        ui.panel_start(i18n.t("panel_error_vs_threshold"), "")
         color = {"ok": "#0D9488", "warning": "#D97706", "critical": "#E11D48"}[result["severity"]]
         fig = go.Figure(go.Indicator(
             mode="gauge+number",

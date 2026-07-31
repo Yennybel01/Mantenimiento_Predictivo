@@ -6,17 +6,16 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from components import api_client, ui
+from components import api_client, ui, i18n
 
-st.set_page_config(page_title="Análisis · Predictive Maintenance", page_icon="📊", layout="wide")
 ui.load_css()
 
 api_url = api_client.get_api_url()
 health = api_client.check_health(api_url)
 
-ui.eyebrow("MÓDULO · MLOPS")
-st.markdown("# 📊 Análisis del modelo")
-st.caption("Estado del modelo en producción: versión, hiperparámetros, métricas de evaluación e historial de reentrenamientos.")
+ui.eyebrow(i18n.t("eyebrow_analisis"))
+st.markdown(f"# {i18n.t('title_analisis')}")
+st.caption(i18n.t("subtitle_analisis"))
 
 if health is None:
     st.stop()
@@ -29,10 +28,10 @@ hparams = metadata.get("hyperparameters", {})
 # KPIs principales
 # --------------------------------------------------------------------------
 cards = [
-    ui.kpi_card("Versión", metadata.get("version", "—"), metadata.get("framework", ""), "var(--accent-signal)"),
-    ui.kpi_card("Dataset", "AI4I 2020", metadata.get("dataset", "")[:28] + "…", "var(--accent-signal)"),
-    ui.kpi_card("Entrenado", metadata.get("trained_at", "—"), "última corrida", "var(--status-ok)"),
-    ui.kpi_card("Umbral", f"{metadata.get('threshold', 0):.4f}", "MSE de reconstrucción", "var(--status-warning)"),
+    ui.kpi_card(i18n.t("kpi_version_analisis"), metadata.get("version", "—"), metadata.get("framework", ""), "var(--accent-signal)"),
+    ui.kpi_card(i18n.t("kpi_dataset"), "AI4I 2020", metadata.get("dataset", "")[:28] + "…", "var(--accent-signal)"),
+    ui.kpi_card(i18n.t("kpi_trained"), metadata.get("trained_at", "—"), i18n.t("kpi_trained_sub"), "var(--status-ok)"),
+    ui.kpi_card(i18n.t("kpi_threshold_analisis"), f"{metadata.get('threshold', 0):.4f}", i18n.t("kpi_threshold_analisis_sub"), "var(--status-warning)"),
 ]
 ui.kpi_grid(cards)
 
@@ -41,12 +40,12 @@ ui.kpi_grid(cards)
 # --------------------------------------------------------------------------
 col1, col2 = st.columns([1.3, 1])
 with col1:
-    ui.panel_start("Separación del Autoencoder", "Error medio de reconstrucción: lecturas normales vs. lecturas con falla real")
+    ui.panel_start(i18n.t("panel_ae_separation"), i18n.t("panel_ae_separation_sub"))
     normal_mean = metrics.get("reconstruction_mse_normal_mean")
     falla_mean = metrics.get("reconstruction_mse_falla_mean")
     if normal_mean is not None and falla_mean is not None:
         fig = go.Figure(go.Bar(
-            x=["Normal", "Con falla"], y=[normal_mean, falla_mean],
+            x=[i18n.t("bar_normal"), i18n.t("bar_falla")], y=[normal_mean, falla_mean],
             marker_color=["#0D9488", "#E11D48"], width=0.5,
             text=[f"{normal_mean:.4f}", f"{falla_mean:.4f}"], textposition="outside",
             textfont=dict(color="#0F172A", family="IBM Plex Mono"),
@@ -54,7 +53,7 @@ with col1:
         threshold = metadata.get("threshold")
         if threshold:
             fig.add_hline(y=threshold, line_dash="dot", line_color="#64748B",
-                           annotation_text=f"umbral ({threshold:.4f})", annotation_font_color="#64748B")
+                           annotation_text=f"{i18n.t('chart_threshold')} ({threshold:.4f})", annotation_font_color="#64748B")
         fig.update_layout(
             height=300, margin=dict(l=10, r=10, t=20, b=10),
             plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
@@ -66,13 +65,13 @@ with col1:
         st.plotly_chart(fig, use_container_width=True)
         pct = metrics.get("pct_fallas_sobre_umbral")
         if pct is not None:
-            st.caption(f"El **{pct:.1f}%** de las fallas reales quedan por encima del umbral (recall aproximado del detector).")
+            st.caption(i18n.t("recall_caption").format(pct=pct))
     else:
-        st.info("Sin métricas de separación disponibles todavía.")
+        st.info(i18n.t("no_metrics"))
     ui.panel_end()
 
 with col2:
-    ui.panel_start("Agente DQN", "Evaluación de la política de mantenimiento")
+    ui.panel_start(i18n.t("panel_dqn_agent"), i18n.t("panel_dqn_agent_sub"))
     reaccion = metrics.get("dqn_episodios_reaccion_a_tiempo")
     if reaccion:
         try:
@@ -100,7 +99,7 @@ with col2:
         fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10),
                            paper_bgcolor="#FFFFFF", font=dict(color="#64748B"))
         st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"Reaccionó a tiempo en **{done} de {total}** episodios simulados cerca de fallas reales.")
+        st.caption(i18n.t("dqn_reaction_caption").format(done=done, total=total))
     st.markdown(metadata.get("nota_evaluacion", metrics.get("nota_evaluacion", "")))
     ui.panel_end()
 
@@ -109,29 +108,29 @@ with col2:
 # --------------------------------------------------------------------------
 col3, col4 = st.columns(2)
 with col3:
-    ui.panel_start("Hiperparámetros — Autoencoder", "")
+    ui.panel_start(i18n.t("panel_hparams_ae"), "")
     st.json(hparams.get("autoencoder", {}))
     ui.panel_end()
 with col4:
-    ui.panel_start("Hiperparámetros — Agente DQN", "")
+    ui.panel_start(i18n.t("panel_hparams_dqn"), "")
     st.json(hparams.get("dqn_agent", {}))
     ui.panel_end()
 
 # --------------------------------------------------------------------------
 # Historial de reentrenamientos + trigger manual
 # --------------------------------------------------------------------------
-ui.panel_start("Historial de reentrenamientos", "Cada corrida del pipeline de CI/CD (.github/workflows/retrain.yml) debería añadir una fila aquí")
+ui.panel_start(i18n.t("panel_retrain_history"), i18n.t("panel_retrain_history_sub"))
 history = metadata.get("retrain_history", [])
 if history:
     import pandas as pd
     st.dataframe(pd.DataFrame(history), use_container_width=True)
 else:
-    st.info("Sin historial de reentrenamientos todavía.")
+    st.info(i18n.t("no_retrain_history"))
 
-if st.button("🔁 Disparar reentrenamiento manual"):
+if st.button(i18n.t("btn_trigger_retrain")):
     try:
         result = api_client.trigger_retrain(api_url)
-        st.success(f"Pipeline encolado: `{result['run_id']}` — estado: {result['status']}")
+        st.success(i18n.t("retrain_queued").format(run_id=result['run_id'], status=result['status']))
     except Exception as e:
-        st.error(f"No se pudo disparar el pipeline: {e}")
+        st.error(i18n.t("retrain_error").format(error=e))
 ui.panel_end()

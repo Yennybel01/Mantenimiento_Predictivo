@@ -8,6 +8,7 @@ se lea como lógica de negocio + layout, no como sopa de <div>s.
 from pathlib import Path
 
 import streamlit as st
+from components import i18n
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -25,7 +26,10 @@ def eyebrow(text: str):
 
 
 def status_pill(severity: str, label: str = None) -> str:
-    label = label or SEVERITY_LABEL.get(severity, severity.upper())
+    if not label:
+        label = i18n.t(severity.upper(), severity.upper())
+    else:
+        label = i18n.t(label, label)
     return f'<span class="pm-pill {severity}"><span class="pm-pill-dot"></span>{label}</span>'
 
 
@@ -51,6 +55,7 @@ def panel_end():
 def alert_row(ts: str, machine_id: str, severity: str, action_label: str, reconstruction_error: float) -> str:
     row_color = {"warning": "var(--status-warning)", "critical": "var(--status-critical)"}
     accent = row_color.get(severity, '#7C8AA3')
+    action_label = i18n.t(action_label, action_label)
     pill = status_pill(severity, action_label)
     return (
         f'<div class="pm-alert-row" style="--row-accent:{accent};">'
@@ -68,21 +73,21 @@ def api_status_banner(health: dict, api_url: str):
     if health is None:
         html = (
             f'<div class="pm-panel" style="border-color: var(--status-critical);">'
-            f'{status_pill("critical", "API NO DISPONIBLE")} '
+            f'{status_pill("critical", i18n.t("API NO DISPONIBLE"))} '
             f'<span style="color:var(--text-secondary); margin-left:10px; font-size:0.85rem;">'
-            f'No se pudo conectar a <code>{api_url}</code>. ¿Está corriendo <code>uvicorn main:app</code>?'
+            f'{i18n.t("No se pudo conectar a")} <code>{api_url}</code>. {i18n.t("¿Está corriendo")} <code>uvicorn main:app</code>?'
             f'</span></div>'
         )
         st.markdown(html, unsafe_allow_html=True)
         return False
     ok = health.get("models_loaded", False)
     sev = "ok" if ok else "warning"
-    label = "SISTEMA OPERATIVO" if ok else "MODELOS NO CARGADOS"
+    label = i18n.t("SISTEMA OPERATIVO") if ok else i18n.t("MODELOS NO CARGADOS")
     html = (
         f'<div class="pm-panel" style="padding:12px 20px; display:flex; align-items:center; gap:16px;">'
         f'{status_pill(sev, label)} '
         f'<span style="color:var(--text-secondary); font-size:0.8rem; font-family:var(--font-mono);">'
-        f'uptime: {health.get("uptime_seconds", 0)}s · API: {api_url}'
+        f'{i18n.t("uptime")}: {health.get("uptime_seconds", 0)}s · {i18n.t("API")}: {api_url}'
         f'</span></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
