@@ -123,7 +123,20 @@ def run_training(data_path: Path, output_dir: Path, dry_run: bool = False):
 
     # ---- Autoencoder ---------------------------------------------------
     print("[TRAIN] Entrenando Autoencoder...")
+
+    # Configuración de TensorFlow ANTES de importarlo para prevenir
+    # Segmentation Fault en runners con memoria limitada (ej. GitHub Actions ~7GB).
+    import os as _os
+    _os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")   # desactiva oneDNN (ahorra RAM)
+    _os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")    # suprime logs verbosos
+    _os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")   # fuerza CPU, evita init GPU
+
     import tensorflow as tf
+
+    # Limitar crecimiento de memoria: evita que TF reserve toda la RAM disponible.
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
 
     n_features = len(SENSOR_COLS)
     inp = tf.keras.Input(shape=(n_features,))
@@ -433,8 +446,10 @@ def main():
 
     # Ciclo completo o dry-run
     if args.dry_run:
-        output_dir = API_DIR / "models_dryrun"
-        print("[DRY-RUN] Modo dry-run: los artefactos se guardarán en models_dryrun/, NO en api/models/")
+        # dry-run guarda en models_new/ para que los pasos --validate-only y --promote
+        # del workflow encuentren los artefactos en el mismo directorio esperado.
+        output_dir = MODELS_NEW_DIR
+        print("[DRY-RUN] Modo dry-run: los artefactos se guardarán en models_new/, NO en api/models/")
 
     if not data_path.exists():
         print(f"[WARN] Dataset no encontrado en {data_path}. Generando datos sintéticos...")
