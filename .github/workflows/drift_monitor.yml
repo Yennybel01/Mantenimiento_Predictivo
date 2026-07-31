@@ -1,0 +1,128 @@
+name: "Drift Monitor — Automated Retraining Trigger"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Propósito: Detectar drift en los datos de producción y disparar el pipeline
+# de reentrenamiento automáticamente si se supera el umbral.
+#
+# Triggers:
+#   - Cron: cada hora (para producción real)
+#   - workflow_dispatch: disparo manual — IDEAL PARA LA DEMO DEL JURADO
+#     (ir a Actions → "Drift Monitor" → "Run workflow" → seleccionar simulate_drift)
+#
+# Cómo usar en la demo:
+#   1. Ir a la pestaña "Actions" del repositorio en GitHub
+#   2. Seleccionar "Drift Monitor — Automated Retraining Trigger"
+#   3. Clic en "Run workflow"
+#   4. Marcar "simulate_drift=true" para ver el pipeline completo activarse
+#   5. El job check-drift detectará drift y disparará retrain.yml automáticamente
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # Cada hora (producción)
+  workflow_dispatch:
+    inputs:
+      simulate_drift:
+        description: "Simular drift sintético para demo (true/false)"
+        required: false
+        default: "false"
+      force_retrain:
+        description: "Forzar reentrenamiento independientemente del drift score"
+        required: false
+        default: "false"
+
+jobs:
+  check-drift:
+    name: "Detectar Drift en Datos de Producción"
+    runs-on: ubuntu-latest
+
+    outputs:
+      drift_detected: ${{ steps.drift.outputs.drift_detected }}
+      drift_score: ${{ steps.drift.outputs.score }}
+      drift_reason: ${{ steps.drift.outputs.reason }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas
+
+      - name: "CASO 2 + CASO 3 — Analizar alertas de producción"
+        id: drift
+        run: |
+          SIMULATE_FLAG=""
+          if [ "${{ github.event.inputs.simulate_drift }}" = "true" ]; then
+            SIMULATE_FLAG="--simulate-drift"
+            echo "::notice title=Modo Demo::Simulando condición de drift con datos sintéticos"
+          fi
+          
+          python api/check_drift.py \
+            --alerts-log api/alerts_log.jsonl \
+            $SIMULATE_FLAG
+
+      - name: "Resumen del análisis de drift"
+        run: |
+          echo "## Resultado del Monitor de Drift" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parámetro | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Drift detectado | ${{ steps.drift.outputs.drift_detected }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Score | ${{ steps.drift.outputs.score }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Razón | ${{ steps.drift.outputs.reason }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+
+  trigger-retrain:
+    name: "Disparar Reentrenamiento por Drift"
+    runs-on: ubuntu-latest
+    needs: check-drift
+    if: |
+      needs.check-drift.outputs.drift_detected == 'true' ||
+      github.event.inputs.force_retrain == 'true'
+
+    steps:
+      - name: "Notificar: Drift confirmado, iniciando reentrenamiento"
+        run: |
+          echo "::warning title=Drift Detectado::Score=${{ needs.check-drift.outputs.drift_score }} | Razón=${{ needs.check-drift.outputs.drift_reason }}"
+          echo "## ⚠️ Drift Detectado — Reentrenamiento Iniciado" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Score de drift**: ${{ needs.check-drift.outputs.drift_score }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Razón**: ${{ needs.check-drift.outputs.drift_reason }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Acción**: Se dispara el pipeline retrain.yml" >> $GITHUB_STEP_SUMMARY
+
+      - name: "Disparar pipeline de reentrenamiento (retrain.yml)"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'retrain.yml',
+              ref: 'main',
+              inputs: {
+                trigger_reason: 'drift_detected',
+                drift_score: '${{ needs.check-drift.outputs.drift_score }}',
+                drift_reason: '${{ needs.check-drift.outputs.drift_reason }}'
+              }
+            });
+            console.log('✅ Pipeline retrain.yml disparado exitosamente');
+
+  no-drift:
+    name: "Sin Drift — Sistema Estable"
+    runs-on: ubuntu-latest
+    needs: check-drift
+    if: needs.check-drift.outputs.drift_detected != 'true' && github.event.inputs.force_retrain != 'true'
+
+    steps:
+      - name: "Confirmar estabilidad del sistema"
+        run: |
+          echo "## ✅ Sistema Estable — Sin Drift Detectado" >> $GITHUB_STEP_SUMMARY
+          echo "No se requiere reentrenamiento en este ciclo." >> $GITHUB_STEP_SUMMARY
+          echo "Próxima verificación: en 1 hora"
