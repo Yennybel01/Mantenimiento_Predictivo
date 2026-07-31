@@ -73,187 +73,117 @@ def backup_current_model() -> Path:
 # ===================================================================
 # PASO 2 — ENTRENAMIENTO
 # ===================================================================
+AE_TRAIN_SCRIPT = API_DIR / "train_autoencoder.py"
+
+
 def run_training(data_path: Path, output_dir: Path, dry_run: bool = False):
     """
     Re-entrena Autoencoder + DQN y guarda artefactos en output_dir.
-    En dry_run=True: usa models_new/ (carpeta temporal).
+
+    IMPORTANTE: TensorFlow (Autoencoder) y PyTorch/stable-baselines3 (DQN)
+    NO pueden coexistir en el mismo proceso — sus librerías nativas (BLAS,
+    oneDNN, thread pools) chocan a nivel de símbolos C++ → Segmentation Fault.
+    El mismo problema que ya resolvió ml_core.py con autoencoder_infer.py.
+
+    Solución: cada fase corre en su propio subproceso  aislado, replicando
+    el patrón subprocess.Popen usado en ml_core.py → _start_autoencoder_proc().
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Carga de datos ------------------------------------------------
-    import pandas as pd
-
-    print(f"[TRAIN] Cargando datos desde: {data_path}")
-    df = pd.read_csv(data_path)
-
-    SENSOR_COLS = [
-        "Air temperature [K]",
-        "Process temperature [K]",
-        "Rotational speed [rpm]",
-        "Torque [Nm]",
-        "Tool wear [min]",
-    ]
-    missing = [c for c in SENSOR_COLS if c not in df.columns]
-    if missing:
-        _fail(f"Columnas faltantes en el CSV: {missing}")
-
-    if len(df) < GATE_MIN_ROWS:
+    # ── FASE 1: Autoencoder (TF) en subproceso AISLADO ─────────────────────
+    # train_autoencoder.py importa TensorFlow pero NUNCA PyTorch.
+    # Este proceso termina antes de que el DQN arranque → cero coexistencia.
+    print("[TRAIN] Lanzando entrenamiento del Autoencoder (proceso aislado TF)...")
+    result_ae = subprocess.run(
+        [
+            sys.executable,
+            str(AE_TRAIN_SCRIPT),
+            "--data-path", str(data_path),
+            "--output-dir", str(output_dir),
+        ],
+        capture_output=False,   # deja que stdout/stderr fluyan al runner
+    )
+    if result_ae.returncode != 0:
         _fail(
-            f"Dataset insuficiente: {len(df)} filas < mínimo {GATE_MIN_ROWS}. "
-            "El model gate rechazará este entrenamiento."
+            f"El subproceso de entrenamiento del Autoencoder falló "
+            f"(exit {result_ae.returncode}). Ver log arriba."
         )
 
-    print(f"[TRAIN] Dataset: {len(df)} filas × {len(SENSOR_COLS)} sensores")
+    # Leer threshold y métricas escritas por el subproceso
+    metrics_path = output_dir / "train_metrics.json"
+    if not metrics_path.exists():
+        _fail("El subproceso del Autoencoder no generó train_metrics.json")
+    train_data = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics = train_data["metrics"]
+    threshold = train_data["threshold"]
 
-    # ---- Preprocesado --------------------------------------------------
-    from sklearn.preprocessing import StandardScaler
-
-    # Entrenamos el Autoencoder SOLO con muestras sin falla (etiqueta 0)
-    if "Machine failure" in df.columns:
-        df_normal = df[df["Machine failure"] == 0].copy()
-        df_fail = df[df["Machine failure"] == 1].copy()
-    else:
-        # Sin etiqueta: usar todo para entrenar
-        df_normal = df.copy()
-        df_fail = df.sample(frac=0.05, random_state=42)
-
-    X_normal = df_normal[SENSOR_COLS].values.astype("float32")
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_normal)
-
-    # ---- Autoencoder ---------------------------------------------------
-    print("[TRAIN] Entrenando Autoencoder...")
-
-    # Configuración de TensorFlow ANTES de importarlo para prevenir
-    # Segmentation Fault en runners con memoria limitada (ej. GitHub Actions ~7GB).
-    import os as _os
-    _os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")   # desactiva oneDNN (ahorra RAM)
-    _os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")    # suprime logs verbosos
-    _os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")   # fuerza CPU, evita init GPU
-
-    import tensorflow as tf
-
-    # Limitar crecimiento de memoria: evita que TF reserve toda la RAM disponible.
-    gpus = tf.config.list_physical_devices("GPU")
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-
-    n_features = len(SENSOR_COLS)
-    inp = tf.keras.Input(shape=(n_features,))
-    enc = tf.keras.layers.Dense(8, activation="relu")(inp)
-    bot = tf.keras.layers.Dense(4, activation="relu")(enc)
-    dec = tf.keras.layers.Dense(8, activation="relu")(bot)
-    out = tf.keras.layers.Dense(n_features, activation="linear")(dec)
-    ae = tf.keras.Model(inputs=inp, outputs=out)
-    ae.compile(optimizer="adam", loss="mse")
-    ae.fit(X_scaled, X_scaled, epochs=50, batch_size=32, verbose=0)
-    print(f"[TRAIN] Autoencoder entrenado. Parámetros: {ae.count_params()}")
-
-    # ---- Umbral (percentil 95 sobre datos normales) --------------------
-    X_test_normal = scaler.transform(df_normal[SENSOR_COLS].values.astype("float32"))
-    recon_normal = ae.predict(X_test_normal, verbose=0)
-    mse_normal = np.mean((X_test_normal - recon_normal) ** 2, axis=1)
-    threshold = float(np.percentile(mse_normal, 95))
-    print(f"[TRAIN] Umbral calculado (p95 normal): {threshold:.6f}")
-
-    # ---- Métricas sobre datos de falla ---------------------------------
-    if len(df_fail) > 0:
-        X_fail = scaler.transform(df_fail[SENSOR_COLS].values.astype("float32"))
-        recon_fail = ae.predict(X_fail, verbose=0)
-        mse_fail = np.mean((X_fail - recon_fail) ** 2, axis=1)
-        pct_detected = float(np.mean(mse_fail > threshold) * 100)
-    else:
-        mse_fail = np.array([])
-        pct_detected = 0.0
-
-    metrics = {
-        "reconstruction_mse_normal_mean": float(np.mean(mse_normal)),
-        "reconstruction_mse_falla_mean": float(np.mean(mse_fail)) if len(mse_fail) > 0 else None,
-        "pct_fallas_sobre_umbral": pct_detected,
-        "n_train_rows": len(df_normal),
-        "n_total_rows": len(df),
-    }
-    print(f"[TRAIN] Métricas: {metrics}")
-
-    # ---- DQN (reentrenamiento rápido con nuevo threshold) --------------
-    print("[TRAIN] Reentrenando agente DQN...")
+    # ── FASE 2: DQN (PyTorch/SB3) en subproceso AISLADO ────────────────────
+    # El proceso del Autoencoder ya terminó → TF ya no está en memoria.
+    # El DQN importa PyTorch pero NUNCA TensorFlow → cero coexistencia.
+    print("[TRAIN] Lanzando reentrenamiento del agente DQN (proceso aislado SB3)...")
     try:
         _retrain_dqn(threshold, output_dir)
     except Exception as e:
         print(f"[TRAIN] Advertencia DQN: {e}. Se reutilizará el DQN actual.")
-        # Copiar DQN existente si el reentrenamiento falla
         src_dqn = MODELS_DIR / "dqn_maintenance_agent.zip"
         if src_dqn.exists():
             shutil.copy2(src_dqn, output_dir / "dqn_maintenance_agent.zip")
-
-    # ---- Guardar artefactos --------------------------------------------
-    import joblib
-
-    ae.save(str(output_dir / "autoencoder.h5"))
-    joblib.dump(scaler, output_dir / "scaler.pkl")
-
-    config = {
-        "sensor_cols": SENSOR_COLS,
-        "error_threshold": threshold,
-        "costos": {"costo_falla": 100, "costo_parada_preventiva": 5, "costo_parada_innecesaria": 10},
-        "normalizacion": {"tool_wear_max": 253.0, "torque_max": 76.6},
-        "acciones": {"0": "operar", "1": "mantenimiento_preventivo", "2": "parada_emergencia"},
-        "observation_space": [
-            "reconstruction_error", "tiempo_desde_mantenimiento_norm",
-            "tool_wear_norm", "torque_norm"
-        ],
-    }
-    (output_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-
-    # Guardar métricas intermedias para el gate
-    (output_dir / "train_metrics.json").write_text(
-        json.dumps({"metrics": metrics, "threshold": threshold, "trained_at": datetime.now(timezone.utc).isoformat()}),
-        encoding="utf-8",
-    )
 
     print(f"[TRAIN] Artefactos guardados en: {output_dir}")
     return metrics, threshold
 
 
 def _retrain_dqn(threshold: float, output_dir: Path):
-    """Entrena brevemente el agente DQN con el nuevo threshold."""
-    import gymnasium as gym
-    import numpy as np
-    from stable_baselines3 import DQN
+    """
+    Entrena el agente DQN en un subproceso aislado (PyTorch/SB3).
 
-    class MaintenanceEnv(gym.Env):
-        """Entorno simplificado para demo de reentrenamiento DQN."""
-        observation_space = gym.spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
-        action_space = gym.spaces.Discrete(3)
+    Se ejecuta via subprocess.run() para garantizar que TensorFlow y PyTorch
+    nunca compartan el mismo espacio de proceso. El subproceso importa
+    stable_baselines3 (PyTorch) pero jamas TensorFlow.
+    """
+    # El script DQN es inline: se genera como un archivo temporal y se ejecuta.
+    # Esto evita necesitar un archivo dqn_train.py permanente en el repo.
+    dqn_code = f"""
+import sys, numpy as np
+from pathlib import Path
+import gymnasium as gym
+from stable_baselines3 import DQN
 
-        def reset(self, seed=None, options=None):
-            self.step_count = 0
-            self.state = np.random.rand(4).astype(np.float32)
-            return self.state, {}
+output_dir = Path(r\"{output_dir}\")
+output_dir.mkdir(parents=True, exist_ok=True)
+THRESHOLD = {threshold}
 
-        def step(self, action):
-            self.step_count += 1
-            error = float(self.state[0])
-            is_anomaly = error > threshold
+class MaintenanceEnv(gym.Env):
+    observation_space = gym.spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
+    action_space = gym.spaces.Discrete(3)
+    def reset(self, seed=None, options=None):
+        self.step_count = 0
+        self.state = np.random.rand(4).astype(np.float32)
+        return self.state, {{}}
+    def step(self, action):
+        self.step_count += 1
+        error = float(self.state[0])
+        is_anomaly = error > THRESHOLD
+        if is_anomaly and action == 2:   reward = 10.0
+        elif is_anomaly and action == 1: reward = 5.0
+        elif not is_anomaly and action == 0: reward = 1.0
+        else: reward = -5.0
+        self.state = np.random.rand(4).astype(np.float32)
+        done = self.step_count >= 100
+        return self.state, reward, done, False, {{}}
 
-            if is_anomaly and action == 2:
-                reward = 10.0
-            elif is_anomaly and action == 1:
-                reward = 5.0
-            elif not is_anomaly and action == 0:
-                reward = 1.0
-            else:
-                reward = -5.0
-
-            self.state = np.random.rand(4).astype(np.float32)
-            done = self.step_count >= 100
-            return self.state, reward, done, False, {}
-
-    env = MaintenanceEnv()
-    model = DQN("MlpPolicy", env, learning_rate=1e-3, verbose=0)
-    model.learn(total_timesteps=5000)
-    model.save(str(output_dir / "dqn_maintenance_agent"))
-    print("[TRAIN] Agente DQN reentrenado y guardado.")
+env = MaintenanceEnv()
+model = DQN(\"MlpPolicy\", env, learning_rate=1e-3, verbose=0)
+model.learn(total_timesteps=5000)
+model.save(str(output_dir / \"dqn_maintenance_agent\"))
+print(\"[DQN-TRAIN] Agente DQN reentrenado y guardado.\")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", dqn_code],
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Subproceso DQN falló con exit code {result.returncode}")
 
 
 # ===================================================================

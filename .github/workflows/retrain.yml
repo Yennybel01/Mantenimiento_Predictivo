@@ -44,12 +44,6 @@ jobs:
   retrain:
     name: "Reentrenamiento del Modelo"
     runs-on: ubuntu-latest
-    env:
-      # Previene Segmentation Fault (exit 139) por memoria insuficiente en GitHub Actions.
-      # El runner gratuito tiene ~7GB RAM y TF+oneDNN puede agotar la memoria.
-      TF_ENABLE_ONEDNN_OPTS: "0"
-      TF_CPP_MIN_LOG_LEVEL: "3"
-      CUDA_VISIBLE_DEVICES: "-1"
 
     steps:
       - uses: actions/checkout@v4
